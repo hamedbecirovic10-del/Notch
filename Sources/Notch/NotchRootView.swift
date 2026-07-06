@@ -367,6 +367,7 @@ private struct FlankLayout<L: View, R: View>: View {
             Spacer(minLength: notchW + 26)
             right.frame(maxWidth: .infinity, alignment: .trailing).padding(.trailing, 15)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 
