@@ -159,11 +159,11 @@ final class SessionMonitor {
             guard let msg = obj["message"] as? [String: Any] else { return false }
             if let m = msg["model"] as? String { pendingModel = friendlyModel(m) }
             // Claude Code writes each assistant message several times; count its
-            // usage once. Only input + output — never cache tokens.
+            // usage once. Output tokens only — this matches Claude Code's own
+            // "↓ N tokens" status readout for the current prompt.
             let id = (msg["id"] as? String) ?? UUID().uuidString
             if !seenIds.contains(id), let u = msg["usage"] as? [String: Any] {
                 seenIds.insert(id)
-                tokens += (u["input_tokens"] as? Int ?? 0)
                 tokens += (u["output_tokens"] as? Int ?? 0)
             }
             if sessionStart == nil { sessionStart = timestamp(obj) ?? Date() }
@@ -249,12 +249,9 @@ final class SessionMonitor {
         case "event_msg":
             if ptype == "token_count", let info = payload["info"] as? [String: Any],
                let total = info["total_token_usage"] as? [String: Any] {
-                // Cumulative input+output (excluding cached). Per-turn = delta
-                // since this prompt began.
-                let inp = (total["input_tokens"] as? Int ?? 0)
-                let cached = (total["cached_input_tokens"] as? Int ?? 0)
-                let out = (total["output_tokens"] as? Int ?? 0)
-                codexNonCached = max(0, inp - cached) + out
+                // Output tokens only, per-turn = delta since this prompt began
+                // (mirrors the "↓ N tokens" readout).
+                codexNonCached = (total["output_tokens"] as? Int ?? 0)
                 tokens = max(0, codexNonCached - codexTurnBase)
                 return true
             }

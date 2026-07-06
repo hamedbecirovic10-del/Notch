@@ -28,24 +28,13 @@ struct NotchRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    /// Collapsed states stay solid black to blend with the physical notch;
-    /// the expanded drawer uses Liquid Glass.
+    /// Always solid black — blends seamlessly with the physical notch in every
+    /// state. A thin hairline outlines the drawer when open.
     @ViewBuilder
     private var background: some View {
         let shape = NotchShape(bottomRadius: bottomRadius)
-        if open {
-            if #available(macOS 26.0, *) {
-                shape.fill(.black.opacity(0.4))
-                    .glassEffect(.regular.tint(.black.opacity(0.55)), in: shape)
-                    .overlay(shape.stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-            } else {
-                shape.fill(.ultraThinMaterial)
-                    .overlay(shape.fill(.black.opacity(0.55)))
-                    .overlay(shape.stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-            }
-        } else {
-            shape.fill(.black)
-        }
+        shape.fill(.black)
+            .overlay(shape.stroke(Color.white.opacity(open ? 0.08 : 0), lineWidth: 0.5))
     }
 
     @ViewBuilder
