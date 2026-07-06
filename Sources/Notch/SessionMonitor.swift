@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Watches both Claude Code (`~/.claude/projects`) and Codex (`~/.codex/sessions`)
 /// transcripts, surfaces whichever was most recently active, and distills it
-/// into live UI state. FSEvents (kernel push) — no polling. A 1-second tick
-/// runs only while a session is active.
+/// into live UI state. FSEvents (kernel push) — no polling, no timers; the
+/// duration clock is driven by the SwiftUI drawer only while it's open.
 final class SessionMonitor {
     private let state: NotchState
     private let roots: [(url: URL, provider: Provider)]
@@ -17,7 +17,7 @@ final class SessionMonitor {
     private var byteOffset: UInt64 = 0
 
     // Per-prompt (current turn) accounting — reset on every new human prompt.
-    private var tokens = 0                 // input + output only, this turn
+    private var tokens = 0                 // output tokens only, this turn
     private var seenIds = Set<String>()    // dedupe triplicated assistant lines
     private var sessionStart: Date?        // start of the *current* prompt
     private var lastActivity: Date?
