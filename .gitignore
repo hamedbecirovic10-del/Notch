@@ -1,0 +1,12 @@
+# Build artifacts
+.build/
+dist/
+*.o
+*.swiftmodule
+
+# macOS
+.DS_Store
+
+# Xcode user state (if opened in Xcode)
+*.xcuserstate
+xcuserdata/
