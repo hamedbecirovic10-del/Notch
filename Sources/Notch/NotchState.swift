@@ -52,7 +52,7 @@ struct MediaInfo: Equatable {
 enum Presentation: Equatable {
     case files      // a drag is happening, or files are being held
     case coding     // a Claude/Codex session is live or just finished
-    case media      // music is playing and nothing else is going on
+    case media      // music has a current track and nothing else is going on
     case idle
 }
 
@@ -80,7 +80,7 @@ final class NotchState: ObservableObject {
     var presentation: Presentation {
         if isDragOver || !droppedFiles.isEmpty { return .files }
         if provider != nil && status != .idle { return .coding }
-        if let m = media, m.isPlaying { return .media }
+        if media != nil { return .media }
         return .idle
     }
 

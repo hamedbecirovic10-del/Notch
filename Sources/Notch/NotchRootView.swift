@@ -64,7 +64,7 @@ private struct WidgetCarousel: View {
         if state.presentation == .coding { p.append(.session) }
         p.append(.clock)
         p.append(.timer)
-        if let m = state.media, m.isPlaying { p.append(.media) }
+        if state.media != nil { p.append(.media) }
         return p
     }
 
@@ -73,7 +73,7 @@ private struct WidgetCarousel: View {
         let idx = min(max(state.widgetPage, 0), pgs.count - 1)
         ZStack {
             page(pgs[idx])
-                .padding(.horizontal, pgs.count > 1 ? 26 : 0)
+                .padding(.horizontal, pgs.count > 1 ? 36 : 0)
                 .transition(.opacity)
                 .id(pgs[idx])
 
@@ -83,7 +83,7 @@ private struct WidgetCarousel: View {
                     Spacer()
                     arrow("chevron.right") { move(1, pgs.count) }
                 }
-                .padding(.horizontal, 6)
+                .padding(.horizontal, 16)
                 .padding(.top, notchH)
 
                 VStack {
@@ -400,7 +400,14 @@ private struct MediaBar: View {
                     .lineLimit(1)
             }
         } right: {
-            Equalizer(animated: false)
+            if state.media?.isPlaying == true {
+                Equalizer(animated: true)
+            } else {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color(red: 0.4, green: 0.85, blue: 0.5))
+                    .frame(width: 14, height: 14)
+            }
         }
     }
 }

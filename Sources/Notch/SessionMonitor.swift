@@ -120,7 +120,7 @@ final class SessionMonitor {
                            kFSEventStreamCreateFlagUseCFTypes)
         guard let s = FSEventStreamCreate(kCFAllocatorDefault, cb, &ctx, paths as CFArray,
                                           FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-                                          0.3, flags) else { return }
+                                          0.1, flags) else { return }
         FSEventStreamSetDispatchQueue(s, queue)
         FSEventStreamStart(s)
         stream = s
@@ -130,7 +130,7 @@ final class SessionMonitor {
         debounce?.cancel()
         let w = DispatchWorkItem { [weak self] in self?.scan() }
         debounce = w
-        queue.asyncAfter(deadline: .now() + 0.12, execute: w)
+        queue.asyncAfter(deadline: .now() + 0.04, execute: w)
     }
 
     // MARK: Scan / tail
@@ -141,7 +141,7 @@ final class SessionMonitor {
             currentPath = latest.path
             currentProvider = latest.provider
             byteOffset = 0
-            resetTurn()
+            resetTurn(clearSessionMetadata: true)
             finished = false
         }
         ingest(latest.path)
@@ -194,12 +194,19 @@ final class SessionMonitor {
 
     // MARK: Claude parsing
 
-    private func resetTurn() {
+    private func resetTurn(clearSessionMetadata: Bool = false) {
         tokens = 0
         seenIds.removeAll(keepingCapacity: true)
         sessionStart = nil
         codexTurnBase = codexNonCached
         grokTurnBase = grokTokensUsed
+        if clearSessionMetadata {
+            pendingModel = nil
+            pendingTask = nil
+            pendingAction = ""
+            pendingStatus = .thinking
+            lastActivity = nil
+        }
     }
 
     private func parseClaude(_ data: Data) -> Bool {
@@ -208,7 +215,9 @@ final class SessionMonitor {
         case "assistant":
             guard let msg = obj["message"] as? [String: Any] else { return false }
             sawAssistantSinceReset = true
-            if let m = msg["model"] as? String { pendingModel = friendlyModel(m) }
+            if let m = msg["model"] as? String, !isSyntheticModel(m) {
+                pendingModel = friendlyModel(m)
+            }
             // Claude Code writes each assistant message several times; count its
             // usage once. Input + output (never cache) — this matches the token
             // number Claude Code shows for the current prompt.
@@ -521,13 +530,15 @@ final class SessionMonitor {
     }
 
     private func friendlyModel(_ id: String) -> String {
-        let l = id.lowercased()
-        if l.contains("fable") { return "Fable 5" }
-        if l.contains("mythos") { return "Mythos 5" }
-        if l.contains("opus") { return "Opus 4.8" }
-        if l.contains("sonnet") { return "Sonnet 5" }
-        if l.contains("haiku") { return "Haiku 4.5" }
-        if l.contains("gpt-5") || l.contains("gpt5") { return "GPT-5" }
+        let raw = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let l = raw.lowercased()
+        if l.contains("fable") { return claudeFamily("Fable", marker: "fable", in: l) }
+        if l.contains("mythos") { return claudeFamily("Mythos", marker: "mythos", in: l) }
+        if l.contains("opus") { return claudeFamily("Opus", marker: "opus", in: l) }
+        if l.contains("sonnet") { return claudeFamily("Sonnet", marker: "sonnet", in: l) }
+        if l.contains("haiku") { return claudeFamily("Haiku", marker: "haiku", in: l) }
+        if l.hasPrefix("gpt-") { return "GPT-" + raw.dropFirst(4) }
+        if l.hasPrefix("gpt") { return "GPT" + raw.dropFirst(3) }
         if l.hasPrefix("o3") { return "o3" }
         if l.hasPrefix("o4") { return "o4" }
         if l.contains("codex") { return "Codex" }
@@ -536,7 +547,41 @@ final class SessionMonitor {
             if l.contains("4") { return "Grok 4" }
             return "Grok"
         }
-        return id
+        return raw.isEmpty ? id : raw
+    }
+
+    private func isSyntheticModel(_ id: String) -> Bool {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "<synthetic>"
+    }
+
+    private func claudeFamily(_ display: String, marker: String, in lower: String) -> String {
+        if let version = claudeVersion(marker: marker, in: lower) {
+            return "\(display) \(version)"
+        }
+        return display
+    }
+
+    private func claudeVersion(marker: String, in lower: String) -> String? {
+        let parts = lower.split(separator: "-").map(String.init)
+        guard let idx = parts.firstIndex(of: marker) else { return nil }
+        var after: [String] = []
+        for part in parts.dropFirst(idx + 1) {
+            guard isVersionToken(part) else { break }
+            after.append(part)
+            if after.count == 2 { break }
+        }
+        if !after.isEmpty { return after.joined(separator: ".") }
+        if idx >= 2, isVersionToken(parts[idx - 2]), isVersionToken(parts[idx - 1]) {
+            return parts[(idx - 2)...(idx - 1)].joined(separator: ".")
+        }
+        if idx >= 1, isVersionToken(parts[idx - 1]) {
+            return parts[idx - 1]
+        }
+        return nil
+    }
+
+    private func isVersionToken(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 2 && value.allSatisfy(\.isNumber)
     }
 
     private static let noise = [

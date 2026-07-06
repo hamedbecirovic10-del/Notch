@@ -37,6 +37,13 @@ final class MediaMonitor {
                         name: NSNotification.Name("com.spotify.client.PlaybackStateChanged"), object: nil)
         dnc.addObserver(self, selector: #selector(musicChanged),
                         name: NSNotification.Name("com.apple.Music.playerInfo"), object: nil)
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(self, selector: #selector(appLaunchedOrActivated(_:)),
+                       name: NSWorkspace.didLaunchApplicationNotification, object: nil)
+        ws.addObserver(self, selector: #selector(appLaunchedOrActivated(_:)),
+                       name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        ws.addObserver(self, selector: #selector(appTerminated(_:)),
+                       name: NSWorkspace.didTerminateApplicationNotification, object: nil)
         // Pick up whatever is already playing at launch.
         queue.async { [weak self] in
             guard let self else { return }
@@ -48,19 +55,52 @@ final class MediaMonitor {
     @objc private func spotifyChanged() { queue.async { [weak self] in self.map { $0.refresh($0.spotify) } } }
     @objc private func musicChanged() { queue.async { [weak self] in self.map { $0.refresh($0.music) } } }
 
+    @objc private func appLaunchedOrActivated(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              let bundleID = app.bundleIdentifier
+        else { return }
+        let launched = note.name == NSWorkspace.didLaunchApplicationNotification
+        if bundleID == spotify.bundleID {
+            refreshForLaunchOrActivation(spotify, launched: launched)
+        } else if bundleID == music.bundleID {
+            refreshForLaunchOrActivation(music, launched: launched)
+        }
+    }
+
+    @objc private func appTerminated(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+              let bundleID = app.bundleIdentifier
+        else { return }
+        if bundleID == spotify.bundleID {
+            clearIfCurrent(spotify.name)
+        } else if bundleID == music.bundleID {
+            clearIfCurrent(music.name)
+        }
+    }
+
+    private func scheduleRefresh(_ p: Player, delay: TimeInterval) {
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in self?.refresh(p) }
+    }
+
+    private func refreshForLaunchOrActivation(_ p: Player, launched: Bool) {
+        scheduleRefresh(p, delay: launched ? 0.2 : 0)
+        if launched { scheduleRefresh(p, delay: 1.0) }
+    }
+
     private func refresh(_ p: Player) {
         guard isRunning(p.bundleID) else { clearIfCurrent(p.name); return }
         guard let out = runScript(app: p.name) else { clearIfCurrent(p.name); return }
         let parts = out.components(separatedBy: "\n")
         let stateStr = parts.indices.contains(0) ? parts[0] : ""
-        let title = parts.indices.contains(1) ? parts[1] : ""
-        let artist = parts.indices.contains(2) ? parts[2] : ""
+        let title = parts.indices.contains(1) ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let artist = parts.indices.contains(2) ? parts[2].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let stopped = stateStr.lowercased().contains("stopped")
         let playing = stateStr.lowercased().contains("playing")
         let info = MediaInfo(appName: p.name, bundleID: p.bundleID,
                              title: title, artist: artist, isPlaying: playing)
         DispatchQueue.main.async { [weak state] in
             guard let state else { return }
-            if playing && !title.isEmpty {
+            if !stopped && !title.isEmpty {
                 state.media = info
             } else if state.media?.appName == p.name {
                 state.media = nil
