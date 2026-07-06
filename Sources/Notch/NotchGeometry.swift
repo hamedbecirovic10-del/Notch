@@ -42,11 +42,8 @@ struct NotchGeometry {
 
     /// The visible shape size for the current state — used identically by the
     /// SwiftUI view (to draw) and the controller (to hit-test / track hover).
-    var idleExpandedSize: CGSize { CGSize(width: 250, height: 76) }
-
     func shapeSize(presentation: Presentation, expanded: Bool, dragOver: Bool) -> CGSize {
-        if dragOver { return expandedSize }
-        if expanded { return presentation == .idle ? idleExpandedSize : expandedSize }
+        if dragOver || expanded { return expandedSize }
         switch presentation {
         case .idle:            return collapsedSize
         case .coding, .media:  return activitySize

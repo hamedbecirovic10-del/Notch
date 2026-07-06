@@ -23,6 +23,8 @@ final class SessionMonitor {
     private var lastActivity: Date?
     private var codexTurnBase = 0          // Codex cumulative baseline at turn start
     private var codexNonCached = 0
+    private var grokTurnBase = 0           // Grok cumulative baseline at turn start
+    private var grokTokensUsed = 0
 
     private var finished = true
     private var activeGeneration = 0
@@ -51,6 +53,7 @@ final class SessionMonitor {
         roots = [
             (home.appendingPathComponent(".claude/projects", isDirectory: true), .claude),
             (home.appendingPathComponent(".codex/sessions", isDirectory: true), .codex),
+            (home.appendingPathComponent(".grok/sessions", isDirectory: true), .grok),
         ]
     }
 
@@ -114,6 +117,9 @@ final class SessionMonitor {
                                          options: [.skipsHiddenFiles]) else { continue }
             for case let url as URL in en {
                 guard url.pathExtension == "jsonl" else { continue }
+                // Grok spreads a session across several .jsonl files; the
+                // events log is the live status stream we follow.
+                if root.provider == .grok && url.lastPathComponent != "events.jsonl" { continue }
                 guard let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate else { continue }
                 if best == nil || m > best!.2 { best = (url.path, root.provider, m) }
             }
@@ -131,11 +137,15 @@ final class SessionMonitor {
 
         var activity = false
         for line in data.split(separator: 0x0A) where !line.isEmpty {
-            let handled = (currentProvider == .claude)
-                ? parseClaude(Data(line))
-                : parseCodex(Data(line))
+            let handled: Bool
+            switch currentProvider {
+            case .claude: handled = parseClaude(Data(line))
+            case .codex:  handled = parseCodex(Data(line))
+            case .grok:   handled = parseGrok(Data(line))
+            }
             if handled { activity = true }
         }
+        if currentProvider == .grok { readGrokTokens(near: path) }
         guard activity else { return }
         if pendingStatus != .finished { finished = false }
         markActivity()
@@ -150,6 +160,7 @@ final class SessionMonitor {
         seenIds.removeAll(keepingCapacity: true)
         sessionStart = nil
         codexTurnBase = codexNonCached
+        grokTurnBase = grokTokensUsed
     }
 
     private func parseClaude(_ data: Data) -> Bool {
@@ -159,11 +170,12 @@ final class SessionMonitor {
             guard let msg = obj["message"] as? [String: Any] else { return false }
             if let m = msg["model"] as? String { pendingModel = friendlyModel(m) }
             // Claude Code writes each assistant message several times; count its
-            // usage once. Output tokens only — this matches Claude Code's own
-            // "↓ N tokens" status readout for the current prompt.
+            // usage once. Input + output (never cache) — this matches the token
+            // number Claude Code shows for the current prompt.
             let id = (msg["id"] as? String) ?? UUID().uuidString
             if !seenIds.contains(id), let u = msg["usage"] as? [String: Any] {
                 seenIds.insert(id)
+                tokens += (u["input_tokens"] as? Int ?? 0)
                 tokens += (u["output_tokens"] as? Int ?? 0)
             }
             if sessionStart == nil { sessionStart = timestamp(obj) ?? Date() }
@@ -249,9 +261,12 @@ final class SessionMonitor {
         case "event_msg":
             if ptype == "token_count", let info = payload["info"] as? [String: Any],
                let total = info["total_token_usage"] as? [String: Any] {
-                // Output tokens only, per-turn = delta since this prompt began
-                // (mirrors the "↓ N tokens" readout).
-                codexNonCached = (total["output_tokens"] as? Int ?? 0)
+                // Input (non-cached) + output, per-turn = delta since this prompt
+                // began. Matches Codex's own per-turn token accounting.
+                let inp = (total["input_tokens"] as? Int ?? 0)
+                let cached = (total["cached_input_tokens"] as? Int ?? 0)
+                let out = (total["output_tokens"] as? Int ?? 0)
+                codexNonCached = max(0, inp - cached) + out
                 tokens = max(0, codexNonCached - codexTurnBase)
                 return true
             }
@@ -320,6 +335,86 @@ final class SessionMonitor {
             }
         }
         return nil
+    }
+
+    // MARK: Grok parsing (events.jsonl for status; updates.jsonl for tokens)
+
+    private func parseGrok(_ data: Data) -> Bool {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = obj["type"] as? String else { return false }
+        let ts = grokTimestamp(obj)
+        switch type {
+        case "turn_started":
+            resetTurn()
+            if let m = obj["model_id"] as? String { pendingModel = friendlyModel(m) }
+            sessionStart = ts ?? Date()
+            lastActivity = sessionStart
+            pendingStatus = .thinking
+            pendingAction = "Thinking…"
+            return true
+        case "phase_changed":
+            switch obj["phase"] as? String {
+            case "streaming_reasoning", "waiting_for_model", "streaming_text":
+                if pendingStatus != .editing && pendingStatus != .running {
+                    pendingStatus = .thinking; pendingAction = "Thinking…"
+                }
+            case "tool_execution", "permission_prompt":
+                if pendingStatus != .editing { pendingStatus = .running }
+            default: break
+            }
+            if sessionStart == nil { sessionStart = ts ?? Date() }
+            lastActivity = ts ?? Date()
+            return true
+        case "tool_started":
+            let (st, act) = grokToolStatus(obj["tool_name"] as? String ?? "")
+            pendingStatus = st; pendingAction = act
+            if sessionStart == nil { sessionStart = ts ?? Date() }
+            lastActivity = ts ?? Date()
+            return true
+        case "turn_ended":
+            pendingStatus = .finished; pendingAction = ""
+            lastActivity = ts ?? Date()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func grokToolStatus(_ name: String) -> (WorkStatus, String) {
+        let n = name.lowercased()
+        if n.contains("replace") || n.contains("edit") || n.contains("write") || n.contains("create") {
+            return (.editing, "Editing files")
+        }
+        if n.contains("bash") || n.contains("shell") || n.contains("exec") || n.contains("command") {
+            return (.running, "Running a command")
+        }
+        if n.contains("read") || n.contains("view") { return (.running, "Reading files") }
+        if n.contains("search") || n.contains("grep") || n.contains("glob") || n.contains("find") {
+            return (.running, "Searching")
+        }
+        return (.running, name.isEmpty ? "Working" : name)
+    }
+
+    private func grokTimestamp(_ obj: [String: Any]) -> Date? {
+        guard let s = obj["ts"] as? String else { return nil }
+        return iso.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    }
+
+    /// Grok records token usage in the sibling `updates.jsonl`; read the most
+    /// recent `tokens_used` (its own real per-session count).
+    private func readGrokTokens(near eventsPath: String) {
+        let updates = (eventsPath as NSString).deletingLastPathComponent + "/updates.jsonl"
+        guard let content = try? String(contentsOfFile: updates, encoding: .utf8) else { return }
+        for line in content.split(separator: "\n").reversed() where line.contains("tokens_used") {
+            guard let d = line.data(using: .utf8),
+                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let params = o["params"] as? [String: Any],
+                  let update = params["update"] as? [String: Any],
+                  let t = update["tokens_used"] as? Int else { continue }
+            grokTokensUsed = t
+            tokens = t
+            return
+        }
     }
 
     // MARK: Finish → idle
@@ -402,6 +497,11 @@ final class SessionMonitor {
         if l.hasPrefix("o3") { return "o3" }
         if l.hasPrefix("o4") { return "o4" }
         if l.contains("codex") { return "Codex" }
+        if l.contains("grok") {
+            if l.contains("build") { return "Grok Build" }
+            if l.contains("4") { return "Grok 4" }
+            return "Grok"
+        }
         return id
     }
 

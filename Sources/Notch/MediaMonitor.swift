@@ -1,6 +1,21 @@
 import Foundation
 import AppKit
 
+/// Fire playback commands at the current media app via AppleScript.
+enum MediaControls {
+    static func run(_ media: MediaInfo?, _ command: String) {
+        guard let app = media?.appName else { return }
+        let src = "tell application \"\(app)\" to \(command)"
+        DispatchQueue.global(qos: .userInitiated).async {
+            var err: NSDictionary?
+            NSAppleScript(source: src)?.executeAndReturnError(&err)
+        }
+    }
+    static func playPause(_ m: MediaInfo?) { run(m, "playpause") }
+    static func next(_ m: MediaInfo?)      { run(m, "next track") }
+    static func previous(_ m: MediaInfo?)  { run(m, "previous track") }
+}
+
 /// Now-playing for Spotify and Apple Music, iPhone-Dynamic-Island style.
 /// Both apps broadcast a DistributedNotification on every play/pause/track
 /// change; we use that as the trigger and read authoritative track info via a

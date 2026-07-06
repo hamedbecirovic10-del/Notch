@@ -1,8 +1,8 @@
 # Notch
 
 A tiny, native macOS app that lives around your MacBook's notch and turns it
-into a live dashboard for **Claude Code** and **Codex**. No Electron, no
-webviews — pure SwiftUI + AppKit, running as a background accessory (no Dock
+into a live dashboard for **Claude Code**, **Codex**, and **Grok**. No Electron,
+no webviews — pure SwiftUI + AppKit, running as a background accessory (no Dock
 icon). Only ever shows real data, and uses ~0.1% of one CPU core.
 
 ---
@@ -58,21 +58,27 @@ terminal and the island comes alive.
   write your next prompt.
 
 ### Real numbers, per prompt
-Tokens are the **output tokens for the current prompt** — the same "↓ N tokens"
-count Claude Code shows in its own status line. They're deduped (Claude writes
-each message to its log several times), exclude all cache tokens, and reset on
-every new prompt. Duration is the elapsed time of the current prompt. Nothing is
-estimated or faked.
+Tokens are the **input + output tokens for the current prompt** (cache excluded)
+— matching the count your agent shows for that turn. They're deduped (Claude
+writes each message to its log several times) and reset on every new prompt, and
+they update live as the turn progresses. Duration is the elapsed time of the
+current prompt. Nothing is estimated or faked.
 
-### Both agents
-Supports **Claude Code** and **Codex**, each with its real logo, showing
-whichever was most recently active. Finish is detected precisely from the
-transcript (Claude's `stop_reason: end_turn` / Codex's `task_complete`), so it
-never falsely says "Finished" mid-work.
+### Three agents
+Supports **Claude Code**, **Codex**, and **Grok**, each with its real logo,
+showing whichever was most recently active. Finish is detected precisely from
+each agent's own logs (Claude `stop_reason: end_turn`, Codex `task_complete`,
+Grok `turn_ended`), so it never falsely says "Finished" mid-work.
 
-It learns everything by tailing the agents' own session transcripts
-(`~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`) — reading
-token usage, model, and activity straight from disk. Nothing is sent anywhere.
+It learns everything by tailing the agents' own session logs
+(`~/.claude/projects`, `~/.codex/sessions`, `~/.grok/sessions`) — reading token
+usage, model, and activity straight from disk. Nothing is sent anywhere.
+
+### Widgets on hover
+Hovering the notch opens a small carousel you can page through with the ‹ ›
+arrows — a **clock/calendar**, a **countdown timer** (drag the dial, then Start),
+and **music controls** when something's playing. When a coding session is live,
+its details are the first page; the widgets are always one arrow away.
 
 ### File shelf
 Drag any file(s) onto the notch and it becomes a drop shelf — hold them there,

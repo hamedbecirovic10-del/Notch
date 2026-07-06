@@ -39,19 +39,250 @@ struct NotchRootView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch state.presentation {
-        case .files:
+        if state.presentation == .files {
             if open { FileShelf(state: state, notchH: notchH, onClear: onClear) }
             else { FilesBar(state: state, notchW: notchW) }
-        case .coding:
-            if state.isExpanded { CodingExpanded(state: state, notchH: notchH) }
-            else { CodingBar(state: state, notchW: notchW) }
-        case .media:
-            if state.isExpanded { MediaExpanded(state: state, notchH: notchH) }
-            else { MediaBar(state: state, notchW: notchW) }
-        case .idle:
-            if state.isExpanded { IdleExpanded(notchH: notchH) } else { Color.clear }
+        } else if open {
+            WidgetCarousel(state: state, notchH: notchH)
+        } else {
+            switch state.presentation {
+            case .coding: CodingBar(state: state, notchW: notchW)
+            case .media:  MediaBar(state: state, notchW: notchW)
+            default:      Color.clear
+            }
         }
+    }
+}
+
+// MARK: - Widget carousel (session · clock · timer · media)
+
+private struct WidgetCarousel: View {
+    @ObservedObject var state: NotchState
+    let notchH: CGFloat
+
+    private enum Page: Equatable { case session, clock, timer, media }
+
+    private var pages: [Page] {
+        var p: [Page] = []
+        if state.presentation == .coding { p.append(.session) }
+        p.append(.clock)
+        p.append(.timer)
+        if let m = state.media, m.isPlaying { p.append(.media) }
+        return p
+    }
+
+    var body: some View {
+        let pgs = pages
+        let idx = min(max(state.widgetPage, 0), pgs.count - 1)
+        ZStack {
+            page(pgs[idx])
+                .padding(.horizontal, pgs.count > 1 ? 26 : 0)
+                .transition(.opacity)
+                .id(pgs[idx])
+
+            if pgs.count > 1 {
+                HStack {
+                    arrow("chevron.left")  { move(-1, pgs.count) }
+                    Spacer()
+                    arrow("chevron.right") { move(1, pgs.count) }
+                }
+                .padding(.horizontal, 6)
+                .padding(.top, notchH)
+
+                VStack {
+                    Spacer()
+                    HStack(spacing: 5) {
+                        ForEach(0..<pgs.count, id: \.self) { i in
+                            Circle().fill(.white.opacity(i == idx ? 0.85 : 0.25))
+                                .frame(width: 4, height: 4)
+                        }
+                    }.padding(.bottom, 7)
+                }
+            }
+        }
+        .onAppear { if state.widgetPage >= pgs.count { state.widgetPage = 0 } }
+    }
+
+    @ViewBuilder private func page(_ p: Page) -> some View {
+        switch p {
+        case .session: SessionPage(state: state, notchH: notchH)
+        case .clock:   ClockPage(notchH: notchH)
+        case .timer:   TimerPage(state: state, notchH: notchH)
+        case .media:   MediaPage(state: state, notchH: notchH)
+        }
+    }
+
+    private func move(_ d: Int, _ count: Int) {
+        withAnimation(.smooth(duration: 0.3)) {
+            state.widgetPage = ((state.widgetPage + d) % count + count) % count
+        }
+    }
+
+    private func arrow(_ symbol: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6)).frame(width: 22, height: 22)
+                .background(Circle().fill(.white.opacity(0.08)))
+        }.buttonStyle(.plain)
+    }
+}
+
+// MARK: - Clock / calendar page
+
+private struct ClockPage: View {
+    let notchH: CGFloat
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let now = ctx.date
+            HStack(spacing: 14) {
+                CalendarGlyph(date: now)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(now, format: .dateTime.hour().minute())
+                        .font(.system(size: 30, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white).monospacedDigit()
+                    Text(now, format: .dateTime.weekday(.wide).month(.wide).day())
+                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 6).padding(.top, notchH)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+}
+
+private struct CalendarGlyph: View {
+    let date: Date
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(date, format: .dateTime.month(.abbreviated))
+                .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                .frame(maxWidth: .infinity).padding(.vertical, 2)
+                .background(Color(red: 0.9, green: 0.3, blue: 0.25))
+            Text(date, format: .dateTime.day())
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(.white).frame(maxWidth: .infinity)
+        }
+        .frame(width: 44, height: 46)
+        .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.08)))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+}
+
+// MARK: - Timer page
+
+private struct TimerPage: View {
+    @ObservedObject var state: NotchState
+    let notchH: CGFloat
+    private let orange = Color(red: 0.95, green: 0.6, blue: 0.2)
+
+    var body: some View {
+        VStack(spacing: 9) {
+            MinuteRuler(minutes: $state.timerMinutes, enabled: !state.timerRunning, tint: orange)
+                .frame(height: 30)
+
+            HStack {
+                Button(action: toggle) {
+                    Text(state.timerRunning ? "Stop" : "Start Timer")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(orange)
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                        .background(Capsule().fill(orange.opacity(0.16)))
+                }.buttonStyle(.plain)
+
+                Spacer()
+
+                TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
+                    Text(state.timerDisplay(now: ctx.date))
+                        .font(.system(size: 26, weight: .medium, design: .rounded))
+                        .foregroundStyle(orange).monospacedDigit()
+                }
+            }
+        }
+        .padding(.horizontal, 4).padding(.top, notchH - 2).padding(.bottom, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
+    private func toggle() {
+        withAnimation(.smooth(duration: 0.25)) {
+            state.timerRunning ? state.stopTimer() : state.startTimer()
+        }
+    }
+}
+
+/// Horizontal minute ruler; drag left/right to change the selected minutes.
+private struct MinuteRuler: View {
+    @Binding var minutes: Int
+    var enabled: Bool
+    var tint: Color
+    @State private var dragBase: Int? = nil
+    private let pxPerMinute: CGFloat = 9
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, mid = w / 2
+            Canvas { ctx, size in
+                for m in max(1, minutes - 30)...(minutes + 30) {
+                    let x = mid + CGFloat(m - minutes) * pxPerMinute
+                    guard x >= 0, x <= w else { continue }
+                    let major = m % 5 == 0
+                    let h: CGFloat = major ? 16 : 9
+                    var p = Path()
+                    p.move(to: CGPoint(x: x, y: 4)); p.addLine(to: CGPoint(x: x, y: 4 + h))
+                    ctx.stroke(p, with: .color(.white.opacity(major ? 0.5 : 0.22)), lineWidth: major ? 1.5 : 1)
+                    if major {
+                        ctx.draw(Text("\(m)").font(.system(size: 8)).foregroundStyle(.white.opacity(0.4)),
+                                 at: CGPoint(x: x, y: 26))
+                    }
+                }
+                // center pointer
+                var tri = Path()
+                tri.move(to: CGPoint(x: mid, y: 2)); tri.addLine(to: CGPoint(x: mid - 4, y: -4))
+                tri.addLine(to: CGPoint(x: mid + 4, y: -4)); tri.closeSubpath()
+                ctx.fill(Path(CGRect(x: mid - 0.75, y: 2, width: 1.5, height: 22)), with: .color(tint))
+            }
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { v in
+                guard enabled else { return }
+                if dragBase == nil { dragBase = minutes }
+                let delta = Int((-v.translation.width / pxPerMinute).rounded())
+                minutes = min(60, max(1, (dragBase ?? minutes) + delta))
+            }.onEnded { _ in dragBase = nil })
+        }
+    }
+}
+
+// MARK: - Media page (with controls)
+
+private struct MediaPage: View {
+    @ObservedObject var state: NotchState
+    let notchH: CGFloat
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                MediaIcon(state: state, size: 34)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.media?.title ?? "")
+                        .font(.system(size: 14, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                    Text(state.media?.artist ?? "")
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                }
+                Spacer()
+            }
+            HStack(spacing: 26) {
+                ctrl("backward.fill") { MediaControls.previous(state.media) }
+                ctrl(state.media?.isPlaying == true ? "pause.fill" : "play.fill") { MediaControls.playPause(state.media) }
+                ctrl("forward.fill") { MediaControls.next(state.media) }
+            }
+        }
+        .padding(.horizontal, 8).padding(.top, notchH - 2).padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+    private func ctrl(_ s: String, _ a: @escaping () -> Void) -> some View {
+        Button(action: a) {
+            Image(systemName: s).font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+        }.buttonStyle(.plain)
     }
 }
 
@@ -129,7 +360,7 @@ private struct FilesBar: View {
 
 // MARK: - Expanded drawer (content starts below the physical notch)
 
-private struct CodingExpanded: View {
+private struct SessionPage: View {
     @ObservedObject var state: NotchState
     let notchH: CGFloat
 
@@ -176,30 +407,6 @@ private struct CodingExpanded: View {
     }
 }
 
-private struct MediaExpanded: View {
-    @ObservedObject var state: NotchState
-    let notchH: CGFloat
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                MediaIcon(state: state, size: 18)
-                Text(state.media?.appName ?? "Now Playing")
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.6))
-                Spacer()
-                Equalizer(animated: true)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(state.media?.title ?? "")
-                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
-                Text(state.media?.artist ?? "")
-                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16).padding(.top, notchH + 6).padding(.bottom, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-}
 
 private struct FileShelf: View {
     @ObservedObject var state: NotchState
@@ -254,19 +461,6 @@ private struct FileThumb: View {
     }
 }
 
-private struct IdleExpanded: View {
-    let notchH: CGFloat
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "moon.zzz.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-            Text("No active session").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
-        }
-        // Sit below the physical notch so the text is never clipped by it.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.top, notchH)
-        .padding(.bottom, 12)
-    }
-}
 
 // MARK: - Shared pieces
 

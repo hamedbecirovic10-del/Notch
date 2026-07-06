@@ -4,11 +4,13 @@ import AppKit
 enum Provider: Equatable {
     case claude
     case codex
+    case grok
 
     var displayName: String {
         switch self {
         case .claude: return "Claude Code"
         case .codex:  return "Codex"
+        case .grok:   return "Grok"
         }
     }
 
@@ -16,6 +18,7 @@ enum Provider: Equatable {
         switch self {
         case .claude: return "claude"
         case .codex:  return "codex"
+        case .grok:   return "grok"
         }
     }
 }
@@ -24,9 +27,14 @@ enum Provider: Equatable {
 enum ProviderLogos {
     static let claude: NSImage? = load("claude")
     static let codex: NSImage? = load("codex")
+    static let grok: NSImage? = load("grok")
 
     static func image(for p: Provider) -> NSImage? {
-        p == .claude ? claude : codex
+        switch p {
+        case .claude: return claude
+        case .codex:  return codex
+        case .grok:   return grok
+        }
     }
 
     private static func load(_ name: String) -> NSImage? {

@@ -98,13 +98,38 @@ final class NotchState: ObservableObject {
 
     var tokenString: String { NotchState.compact(totalTokens) }
 
+    /// Always one decimal place in the K/M range (e.g. 20.0K, 25.8K, 1.2M).
     static func compact(_ n: Int) -> String {
         if n < 1000 { return "\(n)" }
-        if n < 1_000_000 {
-            let v = Double(n) / 1000.0
-            return String(format: v < 10 ? "%.1fK" : "%.0fK", v)
+        if n < 1_000_000 { return String(format: "%.1fK", Double(n) / 1000.0) }
+        return String(format: "%.1fM", Double(n) / 1_000_000.0)
+    }
+
+    // MARK: - Idle widgets (clock / timer / media)
+
+    @Published var widgetPage = 0          // 0 = clock, 1 = timer, 2 = media
+
+    // Countdown timer
+    @Published var timerMinutes = 25       // selected duration on the dial
+    @Published var timerEndDate: Date? = nil
+    @Published var timerRunning = false
+
+    func startTimer() {
+        timerEndDate = Date().addingTimeInterval(Double(max(1, timerMinutes)) * 60)
+        timerRunning = true
+    }
+    func stopTimer() {
+        timerRunning = false
+        timerEndDate = nil
+    }
+    /// Remaining seconds, or the selected duration when idle.
+    func timerDisplay(now: Date) -> String {
+        let secs: Int
+        if timerRunning, let end = timerEndDate {
+            secs = max(0, Int(end.timeIntervalSince(now).rounded()))
+        } else {
+            secs = timerMinutes * 60
         }
-        let v = Double(n) / 1_000_000.0
-        return String(format: v < 10 ? "%.2fM" : "%.1fM", v)
+        return String(format: "%d:%02d", secs / 60, secs % 60)
     }
 }
