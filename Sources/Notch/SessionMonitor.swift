@@ -91,7 +91,7 @@ final class SessionMonitor {
         let age = Date().timeIntervalSince(mtime)
         // Finished+quiet hides fast; an in-progress turn tolerates long thinking
         // gaps (Claude can reason for a while without writing).
-        let limit: TimeInterval = (pendingStatus == .finished) ? 25 : 120
+        let limit: TimeInterval = (pendingStatus == .finished) ? 40 : 240
         guard age > limit else { return }
         DispatchQueue.main.async { [weak state] in
             guard let s = state, s.provider != nil else { return }

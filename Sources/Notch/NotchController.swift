@@ -12,7 +12,9 @@ final class NotchPanel: NSPanel {
                    styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
         isFloatingPanel = true
-        level = .statusBar
+        // Above the menu bar and above large/game windows so the island stays
+        // visible; native fullscreen is handled separately by hiding the panel.
+        level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
         backgroundColor = .clear
         isOpaque = false
         hasShadow = false
@@ -272,8 +274,10 @@ enum Fullscreen {
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
                   let b = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let w = b["Width"], let h = b["Height"] else { continue }
-            // A true fullscreen window spans the whole display (no menu bar gap).
-            if w >= sf.width - 2 && h >= sf.height - 2 { return true }
+            // Only a *native* fullscreen window matches the display size exactly.
+            // A merely-large window (e.g. a 1080p GeForce NOW / game window on a
+            // smaller display) is NOT fullscreen and must not hide the notch.
+            if abs(w - sf.width) < 6 && abs(h - sf.height) < 6 { return true }
         }
         return false
     }
