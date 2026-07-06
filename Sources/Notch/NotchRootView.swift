@@ -272,8 +272,10 @@ private struct IdleExpanded: View {
             Image(systemName: "moon.zzz.fill").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
             Text("No active session").font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-        .padding(.top, notchH * 0.4)
+        // Sit below the physical notch so the text is never clipped by it.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.top, notchH)
+        .padding(.bottom, 12)
     }
 }
 
