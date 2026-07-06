@@ -19,7 +19,6 @@ struct NotchRootView: View {
         ZStack(alignment: .top) {
             background
                 .frame(width: shapeSize.width, height: shapeSize.height)
-                .shadow(color: .black.opacity(open ? 0.5 : 0), radius: 16, y: 9)
 
             content
                 .frame(width: shapeSize.width, height: shapeSize.height, alignment: .top)
@@ -29,12 +28,10 @@ struct NotchRootView: View {
     }
 
     /// Always solid black — blends seamlessly with the physical notch in every
-    /// state. A thin hairline outlines the drawer when open.
+    /// state. No border, no material.
     @ViewBuilder
     private var background: some View {
-        let shape = NotchShape(bottomRadius: bottomRadius)
-        shape.fill(.black)
-            .overlay(shape.stroke(Color.white.opacity(open ? 0.08 : 0), lineWidth: 0.5))
+        NotchShape(bottomRadius: bottomRadius).fill(.black)
     }
 
     @ViewBuilder
@@ -106,7 +103,7 @@ private struct WidgetCarousel: View {
     @ViewBuilder private func page(_ p: Page) -> some View {
         switch p {
         case .session: SessionPage(state: state, notchH: notchH)
-        case .clock:   ClockPage(notchH: notchH)
+        case .clock:   CalendarPage(cal: state.calendar, notchH: notchH)
         case .timer:   TimerPage(state: state, notchH: notchH)
         case .media:   MediaPage(state: state, notchH: notchH)
         }
@@ -127,45 +124,109 @@ private struct WidgetCarousel: View {
     }
 }
 
-// MARK: - Clock / calendar page
+// MARK: - Calendar page (whole month + real macOS Calendar events)
 
-private struct ClockPage: View {
+private struct CalendarPage: View {
+    @ObservedObject var cal: CalendarStore
     let notchH: CGFloat
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-            let now = ctx.date
-            HStack(spacing: 14) {
-                CalendarGlyph(date: now)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(now, format: .dateTime.hour().minute())
-                        .font(.system(size: 30, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white).monospacedDigit()
-                    Text(now, format: .dateTime.weekday(.wide).month(.wide).day())
-                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.6))
+        HStack(alignment: .top, spacing: 12) {
+            MonthGrid(eventDays: cal.eventDays)
+                .frame(width: 176)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    if let img = Assets.image("calendar") {
+                        Image(nsImage: img).resizable().frame(width: 16, height: 16)
+                    }
+                    Text(Date(), format: .dateTime.weekday(.wide).month().day())
+                        .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
                 }
-                Spacer()
+                if !cal.granted {
+                    Text("Enable Calendar access").font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                } else if cal.todaysEvents.isEmpty {
+                    Text("No events today").font(.system(size: 11)).foregroundStyle(.white.opacity(0.4))
+                } else {
+                    ForEach(cal.todaysEvents.prefix(3)) { ev in
+                        HStack(spacing: 6) {
+                            Circle().fill(ev.color).frame(width: 5, height: 5)
+                            Text(ev.allDay ? "all-day" : ev.start.formatted(date: .omitted, time: .shortened))
+                                .font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.55))
+                                .frame(width: 46, alignment: .leading)
+                            Text(ev.title).font(.system(size: 10)).foregroundStyle(.white.opacity(0.85))
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 6).padding(.top, notchH)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .padding(.horizontal, 10).padding(.top, notchH).padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear { cal.loadIfNeeded() }
     }
 }
 
-private struct CalendarGlyph: View {
-    let date: Date
+/// A compact month grid with today highlighted and dots on days that have events.
+private struct MonthGrid: View {
+    let eventDays: Set<Int>
+    private let cal = Calendar.current
+
     var body: some View {
-        VStack(spacing: 0) {
-            Text(date, format: .dateTime.month(.abbreviated))
-                .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-                .frame(maxWidth: .infinity).padding(.vertical, 2)
-                .background(Color(red: 0.9, green: 0.3, blue: 0.25))
-            Text(date, format: .dateTime.day())
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(.white).frame(maxWidth: .infinity)
+        let now = Date()
+        let today = cal.component(.day, from: now)
+        let comps = cal.dateComponents([.year, .month], from: now)
+        let first = cal.date(from: comps) ?? now
+        let daysInMonth = cal.range(of: .day, in: .month, for: now)?.count ?? 30
+        let leading = (cal.component(.weekday, from: first) - cal.firstWeekday + 7) % 7
+
+        VStack(spacing: 2) {
+            Text(now, format: .dateTime.month(.wide).year())
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            let cols = Array(repeating: GridItem(.flexible(), spacing: 1), count: 7)
+            LazyVGrid(columns: cols, spacing: 2) {
+                ForEach(0..<7, id: \.self) { i in
+                    Text(weekdaySymbol(i)).font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.35))
+                }
+                ForEach(0..<(leading + daysInMonth), id: \.self) { idx in
+                    if idx < leading {
+                        Color.clear.frame(height: 15)
+                    } else {
+                        let day = idx - leading + 1
+                        DayCell(day: day, isToday: day == today, hasEvent: eventDays.contains(day))
+                    }
+                }
+            }
         }
-        .frame(width: 44, height: 46)
-        .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.08)))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func weekdaySymbol(_ i: Int) -> String {
+        let s = cal.veryShortWeekdaySymbols
+        return s[(i + cal.firstWeekday - 1) % 7]
+    }
+}
+
+private struct DayCell: View {
+    let day: Int
+    let isToday: Bool
+    let hasEvent: Bool
+    var body: some View {
+        ZStack {
+            if isToday { Circle().fill(Color(red: 0.9, green: 0.3, blue: 0.25)).frame(width: 15, height: 15) }
+            Text("\(day)").font(.system(size: 8, weight: isToday ? .bold : .regular))
+                .foregroundStyle(isToday ? .white : .white.opacity(0.75))
+        }
+        .frame(height: 15)
+        .overlay(alignment: .bottom) {
+            if hasEvent && !isToday {
+                Circle().fill(.white.opacity(0.5)).frame(width: 2.5, height: 2.5).offset(y: 1)
+            }
+        }
     }
 }
 
@@ -177,23 +238,30 @@ private struct TimerPage: View {
     private let orange = Color(red: 0.95, green: 0.6, blue: 0.2)
 
     var body: some View {
-        VStack(spacing: 9) {
-            MinuteRuler(minutes: $state.timerMinutes, enabled: !state.timerRunning, tint: orange)
+        // While running, drive everything off the clock so the ruler line
+        // slides as it counts down; while idle, follow the selected minutes.
+        TimelineView(.periodic(from: .now, by: state.timerRunning ? 0.1 : 1)) { ctx in
+            let remaining = state.timerRunning
+                ? max(0, state.timerEndDate?.timeIntervalSince(ctx.date) ?? 0)
+                : Double(state.timerMinutes * 60)
+            let dial = remaining / 60.0                       // fractional minutes
+            VStack(spacing: 9) {
+                MinuteRuler(value: dial, live: state.timerRunning, tint: orange) { newMinutes in
+                    state.timerMinutes = newMinutes
+                }
                 .frame(height: 30)
 
-            HStack {
-                Button(action: toggle) {
-                    Text(state.timerRunning ? "Stop" : "Start Timer")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(orange)
-                        .padding(.horizontal, 14).padding(.vertical, 6)
-                        .background(Capsule().fill(orange.opacity(0.16)))
-                }.buttonStyle(.plain)
+                HStack {
+                    Button(action: toggle) {
+                        Text(state.timerRunning ? "Stop" : "Start Timer")
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(orange)
+                            .padding(.horizontal, 14).padding(.vertical, 6)
+                            .background(Capsule().fill(orange.opacity(0.16)))
+                    }.buttonStyle(.plain)
 
-                Spacer()
+                    Spacer()
 
-                TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
-                    Text(state.timerDisplay(now: ctx.date))
+                    Text(String(format: "%d:%02d", Int(remaining) / 60, Int(remaining) % 60))
                         .font(.system(size: 26, weight: .medium, design: .rounded))
                         .foregroundStyle(orange).monospacedDigit()
                 }
@@ -210,43 +278,42 @@ private struct TimerPage: View {
     }
 }
 
-/// Horizontal minute ruler; drag left/right to change the selected minutes.
+/// Horizontal minute ruler centered on `value` (fractional minutes). When idle
+/// you drag it to pick a duration (unlimited); when live it slides as the timer
+/// counts down.
 private struct MinuteRuler: View {
-    @Binding var minutes: Int
-    var enabled: Bool
+    var value: Double
+    var live: Bool
     var tint: Color
-    @State private var dragBase: Int? = nil
+    var onChange: (Int) -> Void
+    @State private var dragBase: Double? = nil
     private let pxPerMinute: CGFloat = 9
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width, mid = w / 2
-            Canvas { ctx, size in
-                for m in max(1, minutes - 30)...(minutes + 30) {
-                    let x = mid + CGFloat(m - minutes) * pxPerMinute
+            Canvas { ctx, _ in
+                let lo = Int(floor(value)) - 30, hi = Int(ceil(value)) + 30
+                for m in max(0, lo)...max(0, hi) {
+                    let x = mid + (CGFloat(m) - CGFloat(value)) * pxPerMinute
                     guard x >= 0, x <= w else { continue }
                     let major = m % 5 == 0
-                    let h: CGFloat = major ? 16 : 9
                     var p = Path()
-                    p.move(to: CGPoint(x: x, y: 4)); p.addLine(to: CGPoint(x: x, y: 4 + h))
+                    p.move(to: CGPoint(x: x, y: 4)); p.addLine(to: CGPoint(x: x, y: 4 + (major ? 16 : 9)))
                     ctx.stroke(p, with: .color(.white.opacity(major ? 0.5 : 0.22)), lineWidth: major ? 1.5 : 1)
                     if major {
                         ctx.draw(Text("\(m)").font(.system(size: 8)).foregroundStyle(.white.opacity(0.4)),
                                  at: CGPoint(x: x, y: 26))
                     }
                 }
-                // center pointer
-                var tri = Path()
-                tri.move(to: CGPoint(x: mid, y: 2)); tri.addLine(to: CGPoint(x: mid - 4, y: -4))
-                tri.addLine(to: CGPoint(x: mid + 4, y: -4)); tri.closeSubpath()
                 ctx.fill(Path(CGRect(x: mid - 0.75, y: 2, width: 1.5, height: 22)), with: .color(tint))
             }
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-                guard enabled else { return }
-                if dragBase == nil { dragBase = minutes }
-                let delta = Int((-v.translation.width / pxPerMinute).rounded())
-                minutes = min(60, max(1, (dragBase ?? minutes) + delta))
+                guard !live else { return }
+                if dragBase == nil { dragBase = value }
+                let delta = Double(-v.translation.width / pxPerMinute)
+                onChange(max(1, Int(((dragBase ?? value) + delta).rounded())))
             }.onEnded { _ in dragBase = nil })
         }
     }

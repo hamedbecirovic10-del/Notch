@@ -45,6 +45,18 @@ enum ProviderLogos {
     }
 }
 
+/// Bundled resource images (widget icons etc.), loaded once.
+enum Assets {
+    private static var cache: [String: NSImage] = [:]
+    static func image(_ name: String) -> NSImage? {
+        if let c = cache[name] { return c }
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
+              let img = NSImage(contentsOf: url) else { return nil }
+        cache[name] = img
+        return img
+    }
+}
+
 /// Real app icons (e.g. Spotify, Music) by bundle id, cached.
 enum AppIcons {
     private static var cache: [String: NSImage] = [:]

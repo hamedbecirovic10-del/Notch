@@ -25,6 +25,11 @@ final class SessionMonitor {
     private var codexNonCached = 0
     private var grokTurnBase = 0           // Grok cumulative baseline at turn start
     private var grokTokensUsed = 0
+    // A single user submission can log several user-role lines (image metadata,
+    // slash-command tags, command output, the stop-hook message). We must reset
+    // the turn only ONCE per submission — on the first user line after the
+    // assistant — not on every injected line.
+    private var sawAssistantSinceReset = false
 
     private var finished = true
     private var activeGeneration = 0
@@ -57,10 +62,44 @@ final class SessionMonitor {
         ]
     }
 
+    private var staleTimer: DispatchSourceTimer?
+
     func start() {
         queue.async { [weak self] in
             self?.scan()
             self?.startStream()
+            self?.startStaleTimer()
+        }
+    }
+
+    /// The transcript only changes while an agent is writing. If it goes quiet
+    /// for a while the session was closed (or finished and abandoned) — hide it
+    /// so a closed Claude/Codex/Grok doesn't linger, and stale files never show
+    /// a frozen 0-token reading.
+    private func startStaleTimer() {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 8, repeating: 8)
+        t.setEventHandler { [weak self] in self?.checkStale() }
+        staleTimer = t
+        t.resume()
+    }
+
+    private func checkStale() {
+        guard let path = currentPath,
+              let mtime = (try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date
+        else { return }
+        let age = Date().timeIntervalSince(mtime)
+        // Finished+quiet hides fast; an in-progress turn tolerates long thinking
+        // gaps (Claude can reason for a while without writing).
+        let limit: TimeInterval = (pendingStatus == .finished) ? 25 : 120
+        guard age > limit else { return }
+        DispatchQueue.main.async { [weak state] in
+            guard let s = state, s.provider != nil else { return }
+            withAnimation(.smooth(duration: 0.45)) {
+                s.status = .idle
+                s.provider = nil
+                s.currentAction = ""
+            }
         }
     }
 
@@ -168,6 +207,7 @@ final class SessionMonitor {
         switch obj["type"] as? String {
         case "assistant":
             guard let msg = obj["message"] as? [String: Any] else { return false }
+            sawAssistantSinceReset = true
             if let m = msg["model"] as? String { pendingModel = friendlyModel(m) }
             // Claude Code writes each assistant message several times; count its
             // usage once. Input + output (never cache) — this matches the token
@@ -191,13 +231,15 @@ final class SessionMonitor {
             }
             return true
         case "user":
-            // A new human turn resets the per-prompt counters. This must fire
-            // for ANY real prompt — including slash commands and image-only
-            // messages that have no clean text line — but NOT for tool results.
+            // A user submission logs several user-role lines; reset the turn only
+            // on the first one after the assistant (not tool results).
             guard let m = obj["message"] as? [String: Any], isHumanTurn(m["content"]) else { return false }
-            resetTurn()
-            sessionStart = timestamp(obj) ?? Date()
-            lastActivity = sessionStart
+            if sawAssistantSinceReset {
+                resetTurn()
+                sawAssistantSinceReset = false
+            }
+            if sessionStart == nil { sessionStart = timestamp(obj) ?? Date() }
+            lastActivity = timestamp(obj) ?? Date()
             if let t = humanPrompt(m) { pendingTask = t }   // may stay as prior task for slash cmds
             pendingStatus = .thinking
             pendingAction = "Thinking…"
@@ -282,21 +324,27 @@ final class SessionMonitor {
             lastActivity = timestamp(obj) ?? Date()
             switch ptype {
             case "function_call", "local_shell_call", "custom_tool_call":
+                sawAssistantSinceReset = true
                 let name = (payload["name"] as? String) ?? "shell"
                 let (st, act) = codexToolStatus(name, payload)
                 pendingStatus = st; pendingAction = act
                 return true
             case "reasoning":
+                sawAssistantSinceReset = true
                 pendingStatus = .thinking; pendingAction = "Thinking…"
                 return true
             case "message":
                 if (payload["role"] as? String) == "user" {
-                    resetTurn()
-                    sessionStart = timestamp(obj) ?? Date()
-                    lastActivity = sessionStart
+                    if sawAssistantSinceReset {
+                        resetTurn()
+                        sawAssistantSinceReset = false
+                    }
+                    if sessionStart == nil { sessionStart = timestamp(obj) ?? Date() }
+                    lastActivity = timestamp(obj) ?? Date()
                     if let t = codexUserText(payload["content"]) { pendingTask = t }
                     pendingStatus = .thinking; pendingAction = "Thinking…"
                 } else {
+                    sawAssistantSinceReset = true
                     pendingStatus = .thinking; pendingAction = "Responding…"
                 }
                 return true
@@ -425,23 +473,9 @@ final class SessionMonitor {
 
     private func onFinished() {
         finished = true
-        // Keep showing "Finished" (with this prompt's tokens & duration) so it
-        // stays up while you write the next prompt. Only fade to idle after a
-        // long stretch of no activity — i.e. you've clearly walked away.
-        let gen = activeGeneration
-        queue.asyncAfter(deadline: .now() + 600) { [weak self] in
-            guard let self, self.activeGeneration == gen else { return }
-            DispatchQueue.main.async { [weak self] in
-                guard let s = self?.state else { return }
-                if s.status == .finished {
-                    withAnimation(.smooth(duration: 0.5)) {
-                        s.status = .idle
-                        s.provider = nil
-                        s.currentAction = ""
-                    }
-                }
-            }
-        }
+        // Hiding is handled by the staleness timer: "Finished" stays up while
+        // you write the next prompt, then the session fades out once its log
+        // has been quiet for a while (or the agent is closed).
     }
 
     // MARK: Push to UI

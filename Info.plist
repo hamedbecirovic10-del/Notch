@@ -24,6 +24,10 @@
     <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Notch reads the current track from Spotify and Music to show what's playing at your notch.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Notch shows your upcoming Calendar events in the notch widget.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Notch shows your upcoming Calendar events in the notch widget.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>

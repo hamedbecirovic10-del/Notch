@@ -27,10 +27,10 @@ struct NotchGeometry {
         CGSize(width: notchSize.width + 184, height: notchSize.height)
     }
 
-    /// Expanded panel size (the drawer that drops down on hover). Tall enough
-    /// that its content clears the physical notch height at the top.
+    /// Expanded panel size (the drawer that drops down on hover). Compact —
+    /// tall enough that its content clears the physical notch at the top.
     var expandedSize: CGSize {
-        CGSize(width: 400, height: 178)
+        CGSize(width: 384, height: 156)
     }
 
     /// The window is fixed at the largest state and stays transparent; the

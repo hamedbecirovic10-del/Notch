@@ -105,9 +105,10 @@ final class NotchState: ObservableObject {
         return String(format: "%.1fM", Double(n) / 1_000_000.0)
     }
 
-    // MARK: - Idle widgets (clock / timer / media)
+    // MARK: - Idle widgets (calendar / timer / media)
 
-    @Published var widgetPage = 0          // 0 = clock, 1 = timer, 2 = media
+    let calendar = CalendarStore()
+    @Published var widgetPage = 0          // 0 = calendar, 1 = timer, 2 = media
 
     // Countdown timer
     @Published var timerMinutes = 25       // selected duration on the dial
